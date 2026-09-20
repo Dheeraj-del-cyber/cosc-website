@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useCallback } from "react";
+import React, { useEffect, useRef, useCallback, useState } from "react";
 import Image from "next/image";
 import { blogs as defaultBlogs, type BlogPost } from "@/data/blogs";
 import type { PageFlip } from "page-flip";
@@ -17,6 +17,7 @@ interface ParchmentPageProps {
 
 const ParchmentPage = ({ side, children, className = "" }: ParchmentPageProps) => (
   <div
+    data-density="soft"
     className={`page parchment-bg parchment-page-${side} text-[#26170c] p-4 sm:p-5 flex flex-col justify-between overflow-hidden relative ${className}`}
   >
     <div className="parchment-texture" />
@@ -183,7 +184,7 @@ const DESK_PROPS: DeskProp[] = [
     src: "/blogs/plant.png",
     alt: "Plant",
     containerClass:
-      "absolute -left-24 sm:-left-48 md:-left-64 lg:-left-78 xl:-left-90 top-[55%] sm:top-[58%] z-30 pointer-events-none transition-transform duration-500 ease-out hidden sm:block",
+      "absolute -left-24 sm:-left-48 md:-left-64 lg:-left-78 xl:-left-90 top-[55%] sm:top-[58%] z-30 pointer-events-none transition-transform duration-500 ease-out hidden md:block",
     imgClass: "w-22 sm:w-27 md:w-33 lg:w-40 xl:w-45 h-auto object-contain",
     filter: "drop-shadow(0 20px 25px rgba(0, 0, 0, 0.85))",
   },
@@ -192,7 +193,7 @@ const DESK_PROPS: DeskProp[] = [
     src: "/blogs/mug.png",
     alt: "Coffee Mug",
     containerClass:
-      "absolute -left-8 sm:-left-20 md:-left-32 lg:-left-40 xl:-left-48 top-[95%] sm:top-[95%] z-30 pointer-events-none transition-transform duration-500 ease-out hidden sm:block",
+      "absolute -left-8 sm:-left-20 md:-left-32 lg:-left-40 xl:-left-48 top-[95%] sm:top-[95%] z-30 pointer-events-none transition-transform duration-500 ease-out hidden md:block",
     imgClass: "w-14 sm:w-18 md:w-22 lg:w-24 xl:w-28 h-auto object-contain",
     filter: "drop-shadow(0 15px 20px rgba(0, 0, 0, 0.85))",
   },
@@ -201,7 +202,7 @@ const DESK_PROPS: DeskProp[] = [
     src: "/blogs/bookstack.png",
     alt: "Book stack",
     containerClass:
-      "absolute -right-45 sm:-right-50 md:-right-52 lg:-right-50 xl:-right-80 top-[86%] sm:top-[78%] z-20 pointer-events-none transition-transform duration-500 ease-out hidden sm:block",
+      "absolute -right-45 sm:-right-50 md:-right-52 lg:-right-50 xl:-right-80 top-[86%] sm:top-[78%] z-20 pointer-events-none transition-transform duration-500 ease-out hidden md:block",
     imgClass: "w-60 sm:w-56 md:w-64 lg:w-72 xl:w-96 h-auto object-contain",
     filter: "drop-shadow(0 15px 20px rgba(0, 0, 0, 0.85))",
   },
@@ -210,7 +211,7 @@ const DESK_PROPS: DeskProp[] = [
     src: "/blogs/plant2.png",
     alt: "Plant",
     containerClass:
-      "absolute -right-36 sm:-right-40 md:-right-44 lg:-right-40 xl:-right-48 top-[78%] sm:top-[68%] z-30 pointer-events-none transition-transform duration-500 ease-out hidden sm:block",
+      "absolute -right-36 sm:-right-40 md:-right-44 lg:-right-40 xl:-right-48 top-[78%] sm:top-[68%] z-30 pointer-events-none transition-transform duration-500 ease-out hidden md:block",
     imgClass: "w-15 sm:w-27 md:w-33 lg:w-40 xl:w-30 h-auto object-contain",
     filter: "drop-shadow(0 20px 25px rgba(0, 0, 0, 0.85))",
   },
@@ -219,14 +220,129 @@ const DESK_PROPS: DeskProp[] = [
     src: "/blogs/button.png",
     alt: "Buttons",
     containerClass:
-      "absolute left-1/2 -translate-x-1/2 top-[94%] sm:top-[98%] z-10 pointer-events-none transition-transform duration-500 ease-out hidden sm:block",
+      "absolute left-1/2 -translate-x-1/2 top-[94%] sm:top-[98%] z-10 pointer-events-none transition-transform duration-500 ease-out hidden md:block",
     imgClass: "w-48 sm:w-56 md:w-64 h-auto object-contain",
     filter: "drop-shadow(0 15px 20px rgba(0, 0, 0, 0.85))",
   },
 ];
 
+const clientPointInBook = (el: HTMLElement, clientX: number, clientY: number) => {
+  const rect = el.getBoundingClientRect();
+  return { x: clientX - rect.left, y: clientY - rect.top };
+};
+
+/** FlipDirection values mirrored from page-flip's const enum (FORWARD = 0, BACK = 1). */
+const FLIP_FORWARD = 0;
+const FLIP_BACK = 1;
+
+/** StPageFlip waits 250ms before folding so it can detect a swipe. That makes
+ *  the page ignore the finger, so the fold is started immediately instead.
+ *  This binding also fixes the reverse (back) gesture on mobile:
+ *  - flipPrev's built-in point lands near the invisible virtual left page, so
+ *    the disableFlipByClick corner guard silently rejected every reverse flip
+ *    (Prev button, back swipe, jump back). It is re-aimed at the visible
+ *    page's left corner so the reverse turn actually runs.
+ *  - The fold direction follows the drag direction (drag right = previous
+ *    page) instead of the library's "finger started on the left 40%" rule.
+ *  - The library's 250ms swipe timer can no longer reset the drag mid-gesture,
+ *    which used to misfire a full flip (often forward) on release.
+ *  - A back fold finishes smoothly from its current position instead of
+ *    restarting from the page corner. */
+const bindFlexiblePaperTouch = (pageFlip: PageFlip): (() => void) => {
+  const dist = pageFlip.getUI().getDistElement();
+  const origStart = pageFlip.startUserTouch.bind(pageFlip);
+  const origMove = pageFlip.userMove.bind(pageFlip);
+
+  let touchActive = false;
+  let startX = 0;
+  let moved = false;
+  let forcedDirection: number | null = null;
+
+  // Ignore the library's 250ms swipe-timeout call while a touch is live —
+  // otherwise it resets isUserMove and the release misfires a full flip.
+  pageFlip.startUserTouch = (pos) => {
+    if (touchActive) return;
+    origStart(pos);
+  };
+
+  pageFlip.userMove = (pos, isTouch) => {
+    if (touchActive && forcedDirection === null && Math.abs(pos.x - startX) > 5) {
+      moved = true;
+      // Decide the fold from the drag direction, wherever the finger started
+      forcedDirection = pos.x > startX ? FLIP_BACK : FLIP_FORWARD;
+    }
+    origMove(pos, isTouch);
+  };
+
+  // Route the fold through the drag-decided direction. Flip.start() only uses
+  // the point for direction/corner, so the fold geometry stays finger-accurate.
+  const controller = pageFlip.getFlipController();
+  const dirSource = controller as typeof controller & {
+    getDirectionByPoint?: () => number;
+  };
+  const origFoldStart = controller.start;
+  controller.start = (pos) => {
+    if (forcedDirection === null) return origFoldStart.call(controller, pos);
+    dirSource.getDirectionByPoint = () => forcedDirection as number;
+    try {
+      return origFoldStart.call(controller, pos);
+    } finally {
+      delete dirSource.getDirectionByPoint;
+    }
+  };
+
+  // Re-aim flipPrev at the visible page's left corner (see doc comment above).
+  const origCtrlFlipPrev = controller.flipPrev;
+  controller.flipPrev = (corner) => {
+    const rect = pageFlip.getRender().getRect();
+    controller.flip({
+      x: rect.left + rect.pageWidth * 0.1,
+      y: corner === "bottom" ? rect.height - 2 : 1,
+    });
+  };
+
+  const onTouchStart = (e: TouchEvent) => {
+    const target = e.target;
+    if (target instanceof Element && target.closest("a, button")) return;
+    if (e.changedTouches.length === 0) return;
+    const touch = e.changedTouches[0];
+    const pos = clientPointInBook(dist, touch.clientX, touch.clientY);
+    touchActive = true;
+    startX = pos.x;
+    moved = false;
+    forcedDirection = null;
+    origStart(pos);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchActive) return;
+    touchActive = false;
+    const wasBackDrag = moved && forcedDirection === FLIP_BACK;
+    forcedDirection = null;
+    if (!wasBackDrag) return;
+    // A back fold always completes from its current position; stop the library's
+    // swipe detection from restarting the turn from the page corner.
+    const ui = pageFlip.getUI() as unknown as { touchPoint?: unknown };
+    if ("touchPoint" in ui) ui.touchPoint = null;
+  };
+
+  dist.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
+  dist.addEventListener("touchend", onTouchEnd, { capture: true, passive: true });
+
+  return () => {
+    dist.removeEventListener("touchstart", onTouchStart, true);
+    dist.removeEventListener("touchend", onTouchEnd, true);
+    delete (controller as unknown as { start?: unknown }).start;
+    delete (controller as unknown as { flipPrev?: unknown }).flipPrev;
+    pageFlip.startUserTouch = origStart;
+    pageFlip.userMove = origMove;
+  };
+};
+
 const BLOG_IMAGES = [
   "/blogs/table.png",
+  "/blogs/mobile-table.png",
+  "/blogs/mobile-books.png",
   "/blogs/board.png",
   "/blogs/board2.png",
   "/blogs/sticky.png",
@@ -248,6 +364,22 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
   const sourceRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLDivElement>(null);
   const pageFlipRef = useRef<PageFlip | null>(null);
+  const [isMobile, setIsMobile] = useState<boolean>(false);
+
+  // Responsive breakpoint detection (<768px mobile, >=768px desktop)
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 767px)");
+    setIsMobile(mql.matches);
+
+    const handleChange = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches);
+    };
+
+    mql.addEventListener("change", handleChange);
+    return () => {
+      mql.removeEventListener("change", handleChange);
+    };
+  }, []);
 
   // Preload all blog images on mount to ensure instant rendering
   useEffect(() => {
@@ -300,6 +432,7 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
 
     let isMounted = true;
     let pageFlipInstance: PageFlip | null = null;
+    let unbindFlexibleTouch: (() => void) | null = null;
 
     const initPageFlip = async () => {
       if (!sourceRef.current || !targetRef.current) return;
@@ -323,25 +456,61 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
         const { PageFlip } = await import("page-flip");
         if (!isMounted || !targetRef.current) return;
 
-        const pageFlip = new PageFlip(targetRef.current, {
-          width: 680,
-          height: 880,
-          size: "stretch",
-          minWidth: 280,
-          maxWidth: 800,
-          minHeight: 300,
-          maxHeight: 1000,
-          maxShadowOpacity: 0.5,
-          showCover: false,
-          mobileScrollSupport: false,
-          clickEventForward: true,
-          usePortrait: false,
-          startPage: 0,
-        });
+        const mobile = window.matchMedia("(max-width: 767px)").matches;
+
+        const options = mobile
+          ? {
+              width: 300,
+              height: 430,
+              size: "stretch" as const,
+              minWidth: 220,
+              maxWidth: 420,
+              minHeight: 300,
+              maxHeight: 620,
+              maxShadowOpacity: 0.45,
+              showCover: false,
+              mobileScrollSupport: false,
+              swipeDistance: 18,
+              flippingTime: 520,
+              clickEventForward: true,
+              usePortrait: true,
+              // Drag the sheet; a tap in the middle should not skip pages
+              disableFlipByClick: true,
+              useMouseEvents: true,
+              showPageCorners: true,
+              startPage: 0,
+            }
+          : {
+              width: 680,
+              height: 880,
+              size: "stretch" as const,
+              minWidth: 280,
+              maxWidth: 800,
+              minHeight: 300,
+              maxHeight: 1000,
+              maxShadowOpacity: 0.5,
+              showCover: false,
+              mobileScrollSupport: false,
+              clickEventForward: true,
+              usePortrait: false,
+              showPageCorners: true,
+              startPage: 0,
+            };
+
+        const pageFlip = new PageFlip(targetRef.current, options);
 
         pageFlip.loadFromHTML(clonedPages);
+        if (!isMounted) {
+          pageFlip.destroy();
+          return;
+        }
+
         pageFlipInstance = pageFlip;
         pageFlipRef.current = pageFlip;
+
+        if (mobile) {
+          unbindFlexibleTouch = bindFlexiblePaperTouch(pageFlip);
+        }
       } catch (err) {
         console.error("Failed to initialize PageFlip:", err);
       }
@@ -357,6 +526,7 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
     return () => {
       isMounted = false;
       cancelAnimationFrame(animId);
+      unbindFlexibleTouch?.();
       if (pageFlipInstance) {
         try {
           pageFlipInstance.destroy();
@@ -369,7 +539,7 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
         targetContainer.innerHTML = "";
       }
     };
-  }, [posts]);
+  }, [posts, isMobile]);
 
   // Helper render function for all flipbook pages
   const renderPages = () => (
@@ -627,15 +797,15 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
   );
 
   return (
-    <div className="fixed inset-0 bg-black text-white flex flex-col items-center justify-between p-4 pt-16 pb-4 overflow-hidden select-none">
+    <div className="fixed inset-0 bg-black text-white flex flex-col items-center justify-between p-3 sm:p-4 pt-14 md:pt-16 pb-4 overflow-hidden select-none">
       {/* Hidden React source container to preserve DOM nodes safely across mounts */}
       <div ref={sourceRef} className="hidden" aria-hidden="true">
         {renderPages()}
       </div>
 
-      {/* Table Background Image */}
+      {/* Desktop Table Background Image */}
       <div
-        className="absolute bottom-0 left-0 right-0 h-1/2 pointer-events-none overflow-hidden"
+        className="hidden md:block absolute bottom-0 left-0 right-0 h-1/2 pointer-events-none overflow-hidden"
         style={{ perspective: "1200px" }}
       >
         <div
@@ -649,16 +819,38 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
         />
       </div>
 
+      {/* Mobile Table/Leather Book Background Image */}
+      <div
+        className="md:hidden absolute inset-0 pointer-events-none overflow-hidden bg-cover bg-center opacity-95 transition-opacity duration-300"
+        style={{
+          backgroundImage: "url('/blogs/mobile-table.png')",
+        }}
+      />
+
       {/* Vignette overlay */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,transparent_30%,rgba(0,0,0,0.65)_100%)] pointer-events-none" />
 
+      {/* Mobile Heading: COSC CHRONICLES (Positioned above PageFlip on mobile) */}
+      <div className="md:hidden z-30 flex flex-col items-center justify-center select-none whitespace-nowrap pointer-events-none mt-1 mb-1">
+        <h1 className="font-playfair text-lg sm:text-xl font-bold tracking-[0.18em] text-[#F5E5C9] drop-shadow-lg uppercase text-center">
+          COSC CHRONICLES
+        </h1>
+
+        {/* Golden ornamental line divider with center diamond */}
+        <div className="flex items-center justify-center gap-2 mt-1 w-48 text-[#C99A4B]">
+          <div className="h-[1.5px] flex-1 bg-gradient-to-r from-transparent via-[#C99A4B]/70 to-[#C99A4B]" />
+          <span className="text-[10px] font-serif leading-none text-[#C99A4B]">❖</span>
+          <div className="h-[1.5px] flex-1 bg-gradient-to-l from-transparent via-[#C99A4B]/70 to-[#C99A4B]" />
+        </div>
+      </div>
+
       {/* StPageFlip Flipbook Container */}
       <div
-        className="w-full max-w-4xl h-[70vh] max-h-[600px] relative flex items-center justify-center my-auto z-10"
+        className="w-[calc(100vw-3rem)] max-w-[420px] sm:max-w-[440px] md:w-full md:max-w-4xl h-[calc(100dvh-10rem)] max-h-[560px] min-h-[340px] md:h-[70vh] md:max-h-[600px] md:min-h-[420px] relative flex items-center justify-center my-auto z-10"
         style={{ perspective: "1200px" }}
       >
-        {/* Page Heading: COSC CHRONICLES (Positioned directly above books.png) */}
-        <div className="absolute -top-14 sm:-top-16 md:-top-20 lg:-top-22 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center justify-center select-none whitespace-nowrap pointer-events-none">
+        {/* Desktop Page Heading: COSC CHRONICLES (Positioned directly above books.png on Desktop) */}
+        <div className="hidden md:flex absolute -top-14 sm:-top-16 md:-top-20 lg:-top-22 left-1/2 -translate-x-1/2 z-30 flex-col items-center justify-center select-none whitespace-nowrap pointer-events-none">
           <h1 className="font-playfair text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold tracking-[0.22em] text-[#F5E5C9] drop-shadow-lg uppercase text-center">
             COSC CHRONICLES
           </h1>
@@ -673,7 +865,7 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
 
         {/* Left Board Container with Overlaid Table of Contents */}
         <div
-          className="absolute -left-22 sm:-left-45 md:-left-60 lg:-left-72 xl:-left-85 top-1/2 -translate-y-1/2 z-20 transition-transform duration-500 ease-out hidden sm:block pointer-events-auto"
+          className="absolute -left-22 sm:-left-45 md:-left-60 lg:-left-72 xl:-left-85 top-1/2 -translate-y-1/2 z-20 transition-transform duration-500 ease-out hidden md:block pointer-events-auto"
           style={{
             filter: "drop-shadow(0 25px 35px rgba(0, 0, 0, 0.85))",
           }}
@@ -727,7 +919,7 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
 
         {/* Right Board Container (board2.png) with Overlaid "Want to write a blog?" Callout */}
         <div
-          className="absolute -right-45 sm:-right-50 md:-right-52 lg:-right-50 xl:-right-85 top-[28%] sm:top-[22%] z-20 transition-transform duration-500 ease-out hidden sm:block pointer-events-auto"
+          className="absolute -right-45 sm:-right-50 md:-right-52 lg:-right-50 xl:-right-85 top-[28%] sm:top-[22%] z-20 transition-transform duration-500 ease-out hidden md:block pointer-events-auto"
           style={{
             filter: "drop-shadow(0 25px 35px rgba(0, 0, 0, 0.85))",
           }}
@@ -778,7 +970,7 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
 
         {/* Sticky Note Container (sticky.png) with Overlaid "Ideas worth sharing. ♡" Handwritten Text */}
         <div
-          className="absolute -right-45 sm:-right-50 md:-right-52 lg:-right-50 xl:-right-80 top-[-5%] sm:top-[-10%] z-10 pointer-events-none transition-transform duration-500 ease-out hidden sm:block"
+          className="absolute -right-45 sm:-right-50 md:-right-52 lg:-right-50 xl:-right-80 top-[-5%] sm:top-[-10%] z-10 pointer-events-none transition-transform duration-500 ease-out hidden md:block"
           style={{
             filter: "drop-shadow(0 15px 20px rgba(0, 0, 0, 0.85))",
           }}
@@ -818,8 +1010,8 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
           </div>
         ))}
 
-        {/* Page Navigation Controls (Placed over button image) */}
-        <div className="absolute left-1/2 -translate-x-1/2 top-[100%] sm:top-[104%] z-30 flex items-center gap-6 sm:gap-15">
+        {/* Desktop Page Navigation Controls (Placed over button image on Desktop) */}
+        <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 top-[100%] sm:top-[104%] z-30 items-center gap-6 sm:gap-15">
           <button
             onClick={handlePrev}
             className="px-2 py-1 bg-transparent text-[#f8eedb] hover:text-white text-xs sm:text-sm font-geometric font-bold transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 select-none drop-shadow-md"
@@ -835,9 +1027,9 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
           </button>
         </div>
 
-        {/* Book Base Background Image */}
+        {/* Desktop Book Base Background Image */}
         <div
-          className="absolute inset-0 z-0 flex items-center justify-center pointer-events-none transition-transform duration-500 ease-out"
+          className="hidden md:flex absolute inset-0 z-0 items-center justify-center pointer-events-none transition-transform duration-500 ease-out"
           style={{
             transform: "rotateX(8deg)",
             transformOrigin: "50% 60%",
@@ -856,13 +1048,45 @@ export default function Blogs({ posts = defaultBlogs }: BlogsProps) {
         <div
           ref={targetRef}
           onClick={handleTargetClick}
-          className="w-full h-full transition-transform duration-500 ease-out z-10 relative"
+          className={`w-full h-full z-10 relative flex items-center justify-center ${
+            isMobile ? "" : "transition-transform duration-500 ease-out"
+          }`}
           style={{
-            transform: "rotateX(10deg) translateY(-26px)",
-            transformOrigin: "50% 60%",
+            transform: isMobile ? "rotateZ(-2.5deg)" : "rotateX(10deg) translateY(-26px)",
+            transformOrigin: "50% 50%",
             transformStyle: "preserve-3d",
+            touchAction: isMobile ? "none" : undefined,
+            userSelect: "none",
+            WebkitUserSelect: "none",
           }}
         />
+      </div>
+
+      {/* Mobile Page Navigation Controls */}
+      <div className="md:hidden z-30 flex items-center justify-center gap-6 mt-2 mb-1">
+        <button
+          type="button"
+          onClick={handlePrev}
+          onTouchEnd={(event) => {
+            event.preventDefault();
+            handlePrev();
+          }}
+          className="touch-manipulation px-4 py-1.5 bg-[#2a170b]/90 border border-[#C99A4B]/50 rounded-lg text-[#f8eedb] hover:text-white text-xs font-geometric font-bold transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 select-none shadow-md"
+        >
+          <span>←</span> Prev
+        </button>
+
+        <button
+          type="button"
+          onClick={handleNext}
+          onTouchEnd={(event) => {
+            event.preventDefault();
+            handleNext();
+          }}
+          className="touch-manipulation px-4 py-1.5 bg-[#2a170b]/90 border border-[#C99A4B]/50 rounded-lg text-[#f8eedb] hover:text-white text-xs font-geometric font-bold transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 select-none shadow-md"
+        >
+          Next <span>→</span>
+        </button>
       </div>
     </div>
   );

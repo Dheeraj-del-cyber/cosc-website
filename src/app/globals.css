@@ -159,3 +159,42 @@ body {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(105, 60, 20, 0.45);
 }
+
+/* ─── PageFlip (StPageFlip) Touch Responsiveness ─────────────────────────
+   The page-flip library injects .stf__parent / .stf__item at runtime.
+   Keep native pan off the book so the fold tracks the finger, but still
+   allow vertical reading inside long blog text.
+   ────────────────────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .parchment-page-left,
+  .parchment-page-right {
+    border: 22px solid transparent;
+    border-image-source: url('/blogs/border.png');
+    border-image-slice: 12% 8%;
+    border-image-width: 22px;
+    border-image-repeat: stretch;
+    box-sizing: border-box;
+  }
+
+  .stf__parent,
+  .stf__block,
+  .stf__item {
+    touch-action: none !important;
+    -webkit-user-select: none !important;
+    user-select: none !important;
+  }
+
+  .stf__parent {
+    pointer-events: auto !important;
+  }
+
+  /* Soft paper must update transform/clip-path in the same frame as the finger */
+  .stf__item {
+    transition: none !important;
+    will-change: transform, clip-path;
+  }
+
+  .stf__parent .custom-scrollbar {
+    touch-action: pan-y !important;
+  }
+}
